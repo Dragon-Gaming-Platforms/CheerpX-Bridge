@@ -1,4 +1,5 @@
 import {
+  ALLOWED_PARENT_ORIGIN_PATTERNS,
   ALLOWED_PARENT_ORIGINS,
   ALLOW_LOCALHOST_PARENTS,
   PROTOCOL_VERSION,
@@ -98,11 +99,15 @@ const LOCALHOST_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
  *  - this page's own origin (production: the OS lives on the same
  *    *.github.io origin; also covers our same-site embed-test page),
  *  - the Dragon86 GitHub Pages origin,
+ *  - generated preview origins (Arena agent previews, see config),
  *  - any localhost / 127.0.0.1 port, for OS development.
  */
 export function isOriginAllowed(origin: string): boolean {
   if (origin === window.location.origin) return true;
   if (ALLOWED_PARENT_ORIGINS.includes(origin)) return true;
+  if (ALLOWED_PARENT_ORIGIN_PATTERNS.some((pattern) => pattern.test(origin))) {
+    return true;
+  }
   if (ALLOW_LOCALHOST_PARENTS && LOCALHOST_ORIGIN.test(origin)) return true;
   return false;
 }

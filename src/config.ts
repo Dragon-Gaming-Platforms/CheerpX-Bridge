@@ -96,12 +96,26 @@ export const READY_FALLBACK_MS = 2000;
 /**
  * Origins allowed to drive this page via postMessage, in addition to this
  * page's own origin (in production the OS is the *same* origin:
- * dragon-gaming-platforms.github.io hosts both project sites) and, for
- * development, any localhost origin (see ALLOW_LOCALHOST_PARENTS).
+ * dragon-gaming-platforms.github.io hosts both project sites), localhost
+ * origins for development (see ALLOW_LOCALHOST_PARENTS), and the generated
+ * preview origins matched by ALLOWED_PARENT_ORIGIN_PATTERNS below.
  * Add the OS's origin here if it ever moves to a custom domain.
  */
 export const ALLOWED_PARENT_ORIGINS: readonly string[] = [
   "https://dragon-gaming-platforms.github.io",
+];
+
+/**
+ * Origin *patterns* allowed as parents, for environments whose origins are
+ * generated per session rather than fixed. Currently: Arena agent preview
+ * hosts (https://<port>-<sandbox-id>.e2b.app), so embedded testing from an
+ * agent preview can complete the bridge handshake. Note this only governs
+ * the message layer — a cross-origin parent must ALSO be cross-origin
+ * isolated itself for this page to get SharedArrayBuffer (see README →
+ * "OS integration").
+ */
+export const ALLOWED_PARENT_ORIGIN_PATTERNS: readonly RegExp[] = [
+  /^https:\/\/\d+-[a-z0-9-]+\.e2b\.app$/,
 ];
 
 /** Allow http(s)://localhost:<any port> and 127.0.0.1 as parents (OS dev). */

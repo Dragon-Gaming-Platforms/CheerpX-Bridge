@@ -72,9 +72,14 @@ Rules and guarantees:
 - **Origin allowlist.** Inbound messages are accepted only from the direct
   parent frame and only from: this site's own origin (in production the OS is
   the _same_ origin — `dragon-gaming-platforms.github.io` hosts both project
-  sites), `https://dragon-gaming-platforms.github.io` explicitly, and
+  sites), `https://dragon-gaming-platforms.github.io` explicitly, Arena agent
+  preview origins (`https://<port>-<id>.e2b.app`, for embedded testing), and
   `http://localhost:*` / `http://127.0.0.1:*` for development. Replies are
-  addressed to the exact origin that said hello — never `"*"`.
+  addressed to the exact origin that said hello — never `"*"`. A hello
+  rejected for its origin logs **one** console warning per origin (naming the
+  offending origin) so a misconfigured embed is diagnosable instead of
+  silently timing out — the wire protocol itself stays silent toward
+  untrusted origins.
 - **Resize reaches the TTY** (re-attaching the CheerpX console at the new
   size, which is how CheerpX exposes winsize changes), so full-screen apps
   redraw when the OS window is resized.
@@ -132,8 +137,10 @@ Everything tunable is in [`src/config.ts`](src/config.ts):
   `HttpBytesDevice`; mind GitHub Pages artifact size limits for big images).
 - **`IDB_OVERLAY_NAME`** — namespaced on purpose: all project sites under
   `dragon-gaming-platforms.github.io` share one origin and one IndexedDB.
-- **`ALLOWED_PARENT_ORIGINS`** — add the OS origin here if it ever moves to a
-  custom domain.
+- **`ALLOWED_PARENT_ORIGINS` / `ALLOWED_PARENT_ORIGIN_PATTERNS`** — exact
+  origins (add the OS origin here if it ever moves to a custom domain) and
+  regex patterns for generated origins (currently Arena agent previews,
+  `^https://\d+-[a-z0-9-]+\.e2b\.app$`).
 
 ## Local development
 
@@ -147,7 +154,7 @@ npm test         # bridge protocol regression tests (Node)
 
 To test against a local Dragon86 checkout, point the OS's engine URL at the
 Vite URL (e.g. `http://localhost:5173/`). Localhost parents are allowlisted —
-but see the cross-origin caveat below.
+but see the cross-origin caveat in [OS integration](#os-integration).
 
 ## Manual test checklist
 
@@ -167,7 +174,62 @@ but see the cross-origin caveat below.
 6. Point a real Dragon86 build at the deployed URL (Settings → Engine) and
    open its terminal.
 
-## Integration notes (for the OS side)
+## OS integration
+
+### Cross-origin embedding and cross-origin isolation
+
+CheerpX needs `SharedArrayBuffer`, which requires this page to be
+**cross-origin isolated inside the iframe**. The hoster does everything
+required of the child (COOP/COEP plus `Cross-Origin-Resource-Policy:
+cross-origin`, added by its service worker) — but whether isolation is
+*granted* also depends on the parent. The rules, verified against
+[web.dev's cross-origin isolation guide](https://web.dev/articles/cross-origin-isolation-guide)
+and MDN:
+
+| Parent setup                                                                                              | Hoster isolated? |
+| --------------------------------------------------------------------------------------------------------- | ---------------- |
+| **Same origin** as the hoster (production today: both sites on `dragon-gaming-platforms.github.io`)        | ✅ Yes — the hoster isolates itself; the parent needs nothing, not even the `allow` attribute. |
+| **Cross-origin**, parent page **is itself cross-origin isolated**, iframe has `allow="cross-origin-isolated"` (Dragon86 already sets this attribute) | ✅ Yes — the isolated parent delegates the capability to the iframe. |
+| **Cross-origin**, parent page is **not** cross-origin isolated                                             | ❌ **No — this cannot work.** `allow="cross-origin-isolated"` does **not** help on its own: a parent cannot grant isolation it doesn't have. The whole frame chain must be cross-origin isolated. |
+
+**To be explicit: from a non-COI cross-origin parent, this page cannot become
+cross-origin isolated, `SharedArrayBuffer` stays unavailable, CheerpX cannot
+boot, and the hoster never answers `hello` — the OS just times out.** There is
+no workaround from inside the iframe. A cross-origin parent that wants the
+engine must do **both** of these itself:
+
+1. **Become cross-origin isolated**: serve the OS page with
+   `Cross-Origin-Opener-Policy: same-origin` and
+   `Cross-Origin-Embedder-Policy: require-corp` (or `credentialless`) — as
+   real headers from its server, or via its own copy of coi-serviceworker if
+   it also can't set headers — and
+2. **Delegate to the iframe**: `<iframe allow="cross-origin-isolated" …>`
+   (already set by Dragon86; enforced by Chromium browsers — Firefox/Safari
+   don't implement that Permissions-Policy directive but enforce the same
+   frame-chain requirement through COOP/COEP, so keep the attribute anyway).
+
+Plus the message-layer requirement: the parent origin must be on this
+hoster's allowlist (`ALLOWED_PARENT_ORIGINS` /
+`ALLOWED_PARENT_ORIGIN_PATTERNS` in `src/config.ts`).
+
+Practical consequences:
+
+- **Testing from generated preview origins** (Arena `*.e2b.app` previews are
+  allowlisted for messages): if the OS preview is served *without*
+  COOP/COEP, the handshake still won't complete — not because of the
+  allowlist, but because the engine can't boot. Serve the OS preview with
+  isolation headers (e.g. Vite `server.headers`, like this repo's
+  `vite.config.ts`) so the parent is COI, and the cross-origin combination
+  above applies. If the preview serves OS and hoster from the *same*
+  origin, it's the same-origin row and just works.
+- **Dev on different localhost ports** is cross-origin too (port differs),
+  so the same rule applies — `debug.html` and `embed-test.html` are the
+  reliable local harnesses.
+- **If Dragon86 moves to a custom domain**, the OS page must take on
+  requirement 1 (it already does 2), and its origin must be added to this
+  hoster's allowlist.
+
+### Cold-boot timing
 
 - **Cold first boot can exceed the OS's 6 s timeout.** On a visitor's very
   first load, the service-worker install + one reload + WASM compile + disk
@@ -176,19 +238,16 @@ but see the cross-origin caveat below.
   open) is warm and fast. Consider resetting the 6 s budget when the iframe
   reloads (`load` fires again after the SW reload), or a longer first-visit
   budget — details in `src/main.ts`/`hoster.ts` comments.
-- **Same-origin in production is load-bearing.** A cross-_origin_ iframe only
-  gets `SharedArrayBuffer` if the parent page is itself cross-origin isolated
-  **and** the iframe carries `allow="cross-origin-isolated"`. Today both
-  sites live on `dragon-gaming-platforms.github.io` (same origin), so the
-  hoster isolates itself with no OS-side changes. If Dragon86 moves to its
-  own domain, the OS page will need COOP/COEP headers (or its own
-  coi-serviceworker) plus that `allow` attribute, and the new OS origin must
-  be added to `ALLOWED_PARENT_ORIGINS` above. The same applies in dev when
-  OS and hoster run on different localhost ports — `debug.html` and
-  `embed-test.html` are the reliable local harnesses.
 
 ## Troubleshooting
 
+- **Engine never connects from an embedded OS** — open devtools on the
+  *hoster* frame: if the parent's origin isn't allowlisted you'll see one
+  `[dragon86-hoster] Ignoring bridge hello from non-allowlisted parent
+  origin "…"` warning naming the exact origin to add. If there's no warning
+  but also no `ready`, check `crossOriginIsolated` in the hoster frame —
+  from a cross-origin parent it can only be `true` if the parent itself is
+  cross-origin isolated (see [OS integration](#os-integration)).
 - **`crossOriginIsolated: no` on the status page** — the service worker isn't
   controlling the page yet (hard-reload), the context isn't secure (needs
   HTTPS or localhost), or service workers are unavailable (some private-mode
