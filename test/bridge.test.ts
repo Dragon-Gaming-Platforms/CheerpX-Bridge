@@ -3,19 +3,25 @@
  *
  * These exercise the engine-free protocol layer in Node: message
  * validation, the origin allowlist, ready gating, stdout coalescing,
- * UTF-8 streaming decode, backlog replay and exit ordering. The CheerpX
+ * UTF-8 streaming decode, backlog replay and exit ordering, plus the
+ * BroadcastChannel (engine-tab) and composite transports. The CheerpX
  * engine itself can only be tested in a browser (see debug.html).
  */
 import {
+  BroadcastChannelTransport,
+  CompositeTransport,
   HosterBridge,
   LoopbackTransport,
   PostMessageTransport,
+  type BridgeTransport,
 } from "../src/bridge/hosterBridge";
 import {
   isOriginAllowed,
   parseIncomingMessage,
+  type IncomingMessage,
   type OutgoingMessage,
 } from "../src/bridge/protocol";
+import { BROADCAST_CHANNEL_NAME } from "../src/config";
 
 // --- Minimal browser-environment stub (src modules touch `window` only
 // at call time, never at import time, so stubbing here is safe). ---
@@ -261,6 +267,220 @@ function postMessageTests(): void {
   console.warn = originalWarn;
 }
 
+// ---------- BroadcastChannelTransport (engine-tab mode) ----------
+
+type FakeChannelListener = (ev: { data: unknown }) => void;
+
+/** Spec-flavored fake: delivers to every same-name instance except the sender. */
+class FakeBroadcastChannel {
+  private static readonly registry = new Map<
+    string,
+    Set<FakeBroadcastChannel>
+  >();
+  private readonly listeners: FakeChannelListener[] = [];
+
+  constructor(private readonly channelName: string) {
+    let peers = FakeBroadcastChannel.registry.get(channelName);
+    if (peers === undefined) {
+      peers = new Set();
+      FakeBroadcastChannel.registry.set(channelName, peers);
+    }
+    peers.add(this);
+  }
+
+  static reset(): void {
+    FakeBroadcastChannel.registry.clear();
+  }
+
+  postMessage(data: unknown): void {
+    const clone = JSON.parse(JSON.stringify(data)) as unknown;
+    for (const peer of FakeBroadcastChannel.registry.get(this.channelName) ??
+      []) {
+      if (peer !== this) peer.deliver(clone);
+    }
+  }
+
+  addEventListener(_type: string, fn: FakeChannelListener): void {
+    this.listeners.push(fn);
+  }
+
+  private deliver(data: unknown): void {
+    for (const fn of this.listeners) fn({ data });
+  }
+}
+
+function setGlobalBroadcastChannel(value: unknown): void {
+  (globalThis as Record<string, unknown>).BroadcastChannel = value;
+}
+
+function broadcastChannelUnavailableTests(): void {
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) =>
+    warnings.push(args.map(String).join(" "));
+  setGlobalBroadcastChannel(undefined);
+  try {
+    const t1 = new BroadcastChannelTransport("unavailable-test");
+    const t2 = new BroadcastChannelTransport("unavailable-test");
+    check(
+      "missing BroadcastChannel: no crash, marked unavailable",
+      !t1.available && !t2.available,
+    );
+    t1.send({ v: 1, t: "ready" }); // must not throw
+    check(
+      "missing BroadcastChannel: warned exactly once",
+      warnings.length === 1 && warnings[0].includes("BroadcastChannel"),
+    );
+  } finally {
+    console.warn = originalWarn;
+    setGlobalBroadcastChannel(FakeBroadcastChannel);
+  }
+}
+
+function broadcastChannelTests(): void {
+  setGlobalBroadcastChannel(FakeBroadcastChannel);
+  FakeBroadcastChannel.reset();
+
+  check(
+    "channel name matches the OS contract",
+    BROADCAST_CHANNEL_NAME === "dragon86-hoster-v1",
+  );
+
+  const received: IncomingMessage[] = [];
+  let helloCount = 0;
+  const transport = new BroadcastChannelTransport(
+    BROADCAST_CHANNEL_NAME,
+    () => helloCount++,
+  );
+  transport.onMessage((m) => received.push(m));
+  check("BC transport reports available", transport.available);
+
+  const fakeOs = new FakeBroadcastChannel(BROADCAST_CHANNEL_NAME);
+  const osReceived: Array<Record<string, unknown>> = [];
+  fakeOs.addEventListener("message", (ev) =>
+    osReceived.push(ev.data as Record<string, unknown>),
+  );
+
+  fakeOs.postMessage({ v: 1, t: "hello" });
+  check(
+    "hello over channel reaches handler, onHello fires",
+    received.length === 1 && received[0].t === "hello" && helloCount === 1,
+  );
+
+  fakeOs.postMessage({ v: 2, t: "hello" });
+  check(
+    "malformed channel message dropped by the validator",
+    received.length === 1,
+  );
+
+  // Another hoster tab's outbound traffic must never become our stdin.
+  fakeOs.postMessage({ v: 1, t: "data", d: "reflected", via: "bc-hoster" });
+  check("hoster-stamped channel traffic ignored", received.length === 1);
+
+  fakeOs.postMessage({ v: 1, t: "data", d: "ls\r" });
+  check("plain OS data accepted", received.length === 2);
+
+  transport.send({ v: 1, t: "ready" });
+  check(
+    "send posts to channel with protocol fields intact",
+    osReceived.length === 1 &&
+      osReceived[0].v === 1 &&
+      osReceived[0].t === "ready",
+  );
+  check("outbound carries the hoster marker", osReceived[0].via === "bc-hoster");
+  check("no self-delivery of own sends", received.length === 2);
+
+  const received2: IncomingMessage[] = [];
+  const transport2 = new BroadcastChannelTransport(BROADCAST_CHANNEL_NAME);
+  transport2.onMessage((m) => received2.push(m));
+  transport.send({ v: 1, t: "data", d: "engine output" });
+  check(
+    "second hoster tab ignores first tab's output",
+    received2.length === 0 && osReceived.length === 2,
+  );
+}
+
+// ---------- CompositeTransport ----------
+
+function compositeTransportTests(): void {
+  const sentA: OutgoingMessage[] = [];
+  const sentB: OutgoingMessage[] = [];
+  const childHandlers: Array<(msg: IncomingMessage) => void> = [];
+  const childA: BridgeTransport = {
+    send: (m) => sentA.push(m),
+    onMessage: (h) => childHandlers.push(h),
+  };
+  const childB: BridgeTransport = {
+    send: (m) => sentB.push(m),
+    onMessage: (h) => childHandlers.push(h),
+  };
+
+  const composite = new CompositeTransport([childA, childB]);
+  const received: IncomingMessage[] = [];
+  composite.onMessage((m) => received.push(m));
+  check(
+    "composite registers the handler on every child",
+    childHandlers.length === 2,
+  );
+
+  childHandlers[0]?.({ v: 1, t: "hello" });
+  childHandlers[1]?.({ v: 1, t: "data", d: "x" });
+  check(
+    "input from either child reaches the single handler",
+    received.length === 2,
+  );
+
+  composite.send({ v: 1, t: "ready" });
+  check(
+    "output fans out to every child exactly once",
+    sentA.length === 1 && sentB.length === 1,
+  );
+}
+
+// ---------- End-to-end: one bridge over CompositeTransport([BC]) ----------
+
+async function tabModeIntegrationTest(): Promise<void> {
+  setGlobalBroadcastChannel(FakeBroadcastChannel);
+  FakeBroadcastChannel.reset();
+
+  const written: string[] = [];
+  const bridge = new HosterBridge(
+    new CompositeTransport([
+      new BroadcastChannelTransport(BROADCAST_CHANNEL_NAME),
+    ]),
+    { write: (d) => written.push(d), resize() {} },
+  );
+
+  const os = new FakeBroadcastChannel(BROADCAST_CHANNEL_NAME);
+  const osReceived: Array<Record<string, unknown>> = [];
+  os.addEventListener("message", (ev) =>
+    osReceived.push(ev.data as Record<string, unknown>),
+  );
+
+  os.postMessage({ v: 1, t: "hello" });
+  check("tab mode: no ready before engine is up", osReceived.length === 0);
+
+  bridge.acceptOutput(enc.encode("user@dragon86:~$ "));
+  bridge.markEngineReady();
+  check(
+    "tab mode: ready then backlog over the channel",
+    osReceived.map((m) => m.t).join(",") === "ready,data",
+  );
+
+  os.postMessage({ v: 1, t: "data", d: "pwd\r" });
+  check(
+    "tab mode: OS keystrokes reach engine stdin",
+    written.join("") === "pwd\r",
+  );
+
+  bridge.acceptExit(0);
+  check("tab mode: exit posted to the channel", osReceived.at(-1)?.t === "exit");
+}
+
 await bridgeTests();
 postMessageTests();
+broadcastChannelUnavailableTests();
+broadcastChannelTests();
+compositeTransportTests();
+await tabModeIntegrationTest();
 console.log(`\nAll ${passed} bridge protocol checks passed.`);

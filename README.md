@@ -3,8 +3,10 @@
 The **headless CheerpX engine page** for [Dragon86](https://github.com/Dragon-Gaming-Platforms/Dragon86),
 a web OS by Dragon Gaming Platforms. This repo has **no product UI**: it boots a
 Linux shell (bash on Debian) inside [CheerpX](https://cheerpx.io) and exposes
-it to the OS through a small `postMessage` bridge. Dragon86 embeds this page in
-a hidden 1×1 iframe and renders the terminal itself.
+it to the OS through a small message bridge. Dragon86 either embeds this page
+in a hidden 1×1 iframe (`postMessage`) or opens it as a separate top-level
+"engine tab" (`BroadcastChannel`) — same protocol either way — and renders
+the terminal itself.
 
 ## Architecture
 
@@ -83,6 +85,13 @@ Rules and guarantees:
 - **Resize reaches the TTY** (re-attaching the CheerpX console at the new
   size, which is how CheerpX exposes winsize changes), so full-screen apps
   redraw when the OS window is resized.
+- **Tab mode.** The identical messages also run over a `BroadcastChannel`
+  named `dragon86-hoster-v1` when the OS opens this page as a separate tab
+  instead of embedding it (see [OS integration](#os-integration)). Both
+  transports are always live behind one bridge/engine. One additive detail:
+  hoster→OS messages *on the channel* carry an extra `via: "bc-hoster"`
+  field so that a second hoster tab ignores the first tab's output instead
+  of feeding it into its own shell; the OS ignores the field.
 - New fields may be added within v1 only if backward compatible.
 
 The protocol/transport/batching layer (`src/bridge/`) is **engine-free**; the
@@ -141,6 +150,8 @@ Everything tunable is in [`src/config.ts`](src/config.ts):
   origins (add the OS origin here if it ever moves to a custom domain) and
   regex patterns for generated origins (currently Arena agent previews,
   `^https://\d+-[a-z0-9-]+\.e2b\.app$`).
+- **`BROADCAST_CHANNEL_NAME`** — channel for "engine in a separate tab"
+  mode (`dragon86-hoster-v1`); must match the name Dragon86 listens on.
 
 ## Local development
 
@@ -229,6 +240,42 @@ Practical consequences:
   requirement 1 (it already does 2), and its origin must be added to this
   hoster's allowlist.
 
+### Engine in a separate tab (BroadcastChannel)
+
+Dragon86 can alternatively open this page as a **top-level tab** and speak
+the same bridge protocol v1 over a `BroadcastChannel` named
+`dragon86-hoster-v1`. This hoster always runs both transports (iframe
+`postMessage` and the channel) behind a single bridge and engine, so the
+mode needs no hoster-side configuration; the tab remains a headless engine
+with just its status page (which gains a "Tab peer" line) — Dragon86's
+terminal still renders everything.
+
+Why this mode exists: as a top-level document, the hoster cross-origin
+isolates *itself* via its service worker, so the engine gets
+`SharedArrayBuffer` **without the OS page needing to be cross-origin
+isolated** — it sidesteps the entire cross-origin-parent problem above.
+Direct `postMessage` between the tabs is unavailable (this page's COOP
+severs `window.opener`), hence the channel.
+
+Constraints and assumptions:
+
+- **Same-origin only.** `BroadcastChannel` never crosses origins, so tab
+  mode requires the OS and the hoster on the same origin — true in
+  production (`dragon-gaming-platforms.github.io` hosts both). There is no
+  per-message origin to allowlist on a channel; the trust boundary is the
+  origin itself. Inbound channel traffic still passes the full protocol
+  validator.
+- **One OS peer at a time (v1 assumption).** Both transports feed one PTY:
+  an embedded peer and a tab peer connected simultaneously would share
+  stdin/stdout and fight over the console size. The OS drives one mode at
+  a time. Likewise, don't open two engine tabs: hoster-stamped channel
+  traffic carries a `via: "bc-hoster"` marker so engine tabs can't feed
+  each other's output back as input, but two engines would still both
+  answer the OS. Peer demultiplexing would need session IDs in a future
+  protocol revision.
+- Browsers without `BroadcastChannel` simply lose tab mode (the transport
+  disables itself with one console warning); iframe mode is unaffected.
+
 ### Cold-boot timing
 
 - **Cold first boot can exceed the OS's 6 s timeout.** On a visitor's very
@@ -271,7 +318,7 @@ src/
   config.ts              every tunable (runtime URL, disk, allowlist…)
   bridge/
     protocol.ts          message types, validation, origin allowlist
-    hosterBridge.ts      ready-gating, batching, postMessage/loopback transports
+    hosterBridge.ts      ready-gating, batching, transports (postMessage, BroadcastChannel, composite, loopback)
   engine/
     adapter.ts           engine contract (bridge-facing interface)
     cheerpx.d.ts         minimal typings for the CDN runtime

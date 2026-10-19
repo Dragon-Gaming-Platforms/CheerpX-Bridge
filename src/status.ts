@@ -25,6 +25,8 @@ export class StatusView {
     window.parent === window
       ? "not embedded (opened directly)"
       : "embedded — waiting for OS hello…";
+  /** Separate-tab (BroadcastChannel) peer; row hidden until first set. */
+  private tabPeerText: string | null = null;
 
   constructor(private readonly el: HTMLElement) {
     this.render();
@@ -40,6 +42,11 @@ export class StatusView {
     this.render();
   }
 
+  setTabPeer(text: string): void {
+    this.tabPeerText = text;
+    this.render();
+  }
+
   private render(): void {
     const isolated = window.crossOriginIsolated === true;
     const sab = typeof SharedArrayBuffer !== "undefined";
@@ -52,6 +59,9 @@ export class StatusView {
       ["Disk image", `${DISK.kind} · ${DISK.url}`],
       ["OS peer", this.peerText],
     ];
+    if (this.tabPeerText !== null) {
+      rows.push(["Tab peer", this.tabPeerText]);
+    }
 
     const dl = document.createElement("dl");
     dl.className = "status";

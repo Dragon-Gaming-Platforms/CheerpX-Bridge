@@ -1,5 +1,6 @@
 import {
   BACKLOG_MAX_BYTES,
+  BROADCAST_CHANNEL_NAME,
   FLUSH_INTERVAL_MS,
   FLUSH_MAX_BYTES,
   PROTOCOL_VERSION,
@@ -273,5 +274,119 @@ export class LoopbackTransport implements BridgeTransport {
     const clone = JSON.parse(JSON.stringify(raw)) as unknown;
     const msg = parseIncomingMessage(clone);
     if (msg !== null) this.handler?.(msg);
+  }
+}
+
+/**
+ * Marker stamped on every message THIS hoster posts on the
+ * BroadcastChannel (extra field `via`). A channel delivers to every
+ * same-name channel on the origin except the sending object — so a
+ * *second* hoster tab would hear our stdout `data` messages, and `data`
+ * is a valid inbound type: one engine's output would become the other's
+ * stdin (feedback loop). Hosters therefore ignore channel traffic
+ * carrying this marker. The OS ignores unknown fields, so this stays
+ * backward compatible within protocol v1. It prevents hoster↔hoster
+ * cross-talk only — two engines answering one OS at once is still
+ * unsupported (see CompositeTransport); don't open two engine tabs.
+ */
+const BC_HOSTER_VIA = "bc-hoster";
+
+function isHosterChannelMessage(raw: unknown): boolean {
+  return (
+    typeof raw === "object" &&
+    raw !== null &&
+    (raw as Record<string, unknown>).via === BC_HOSTER_VIA
+  );
+}
+
+let broadcastChannelWarned = false;
+
+function createBroadcastChannel(name: string): BroadcastChannel | null {
+  try {
+    if (typeof BroadcastChannel === "undefined") {
+      throw new Error("BroadcastChannel unsupported");
+    }
+    return new BroadcastChannel(name);
+  } catch {
+    if (!broadcastChannelWarned) {
+      broadcastChannelWarned = true;
+      console.warn(
+        `[dragon86-hoster] BroadcastChannel unavailable — "engine tab" ` +
+          `mode disabled (embedded iframe mode is unaffected).`,
+      );
+    }
+    return null;
+  }
+}
+
+/**
+ * Tab-mode transport: the OS opens this page as a separate top-level tab
+ * and both sides speak bridge protocol v1 over a BroadcastChannel.
+ * (window.opener is severed by this page's COOP, so direct postMessage
+ * between the tabs is unavailable; BroadcastChannel is the side channel.)
+ *
+ * Trust boundary differs from PostMessageTransport: BroadcastChannel is
+ * same-origin by platform construction, so there is no per-message origin
+ * to allowlist — any page on this origin can post. Inbound traffic still
+ * goes through the full protocol validator, and hoster-stamped traffic
+ * (our own outbound, reflected via other tabs) is dropped up front.
+ */
+export class BroadcastChannelTransport implements BridgeTransport {
+  private handler: ((msg: IncomingMessage) => void) | null = null;
+  private readonly channel: BroadcastChannel | null;
+  /** False when BroadcastChannel doesn't exist in this browser/context. */
+  readonly available: boolean;
+
+  constructor(
+    channelName: string = BROADCAST_CHANNEL_NAME,
+    private readonly onHello?: () => void,
+  ) {
+    this.channel = createBroadcastChannel(channelName);
+    this.available = this.channel !== null;
+    this.channel?.addEventListener("message", (ev) =>
+      this.onChannelMessage(ev),
+    );
+  }
+
+  send(msg: OutgoingMessage): void {
+    this.channel?.postMessage({ ...msg, via: BC_HOSTER_VIA });
+  }
+
+  onMessage(handler: (msg: IncomingMessage) => void): void {
+    this.handler = handler;
+  }
+
+  private onChannelMessage(ev: MessageEvent): void {
+    if (isHosterChannelMessage(ev.data)) return;
+    const msg = parseIncomingMessage(ev.data);
+    if (msg === null) return;
+    if (msg.t === "hello") this.onHello?.();
+    this.handler?.(msg);
+  }
+}
+
+/**
+ * Fan-out transport: ONE bridge (and one engine) behind several
+ * transports. Outbound messages go to every transport; inbound messages
+ * from any transport reach the single bridge handler. This is how the
+ * engine page serves an embedded OS (postMessage) and a tab-mode OS
+ * (BroadcastChannel) with one HosterBridge — two bridges on one engine
+ * would double-announce and double-send engine output.
+ *
+ * Known v1 limitation (accepted): if an embedded peer AND a tab peer are
+ * connected simultaneously, they share the single PTY — keystrokes merge
+ * on stdin, output broadcasts to both, a resize from either resizes the
+ * one console. The OS drives one mode at a time; demultiplexing peers
+ * would need session IDs in a future protocol revision.
+ */
+export class CompositeTransport implements BridgeTransport {
+  constructor(private readonly transports: readonly BridgeTransport[]) {}
+
+  send(msg: OutgoingMessage): void {
+    for (const transport of this.transports) transport.send(msg);
+  }
+
+  onMessage(handler: (msg: IncomingMessage) => void): void {
+    for (const transport of this.transports) transport.onMessage(handler);
   }
 }
