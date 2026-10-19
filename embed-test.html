@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Dragon86 Hoster — embed test</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐉</text></svg>"
+    />
+    <!-- NOTE: no coi-serviceworker on this page. The PARENT (OS) does not
+         need cross-origin isolation — only the engine iframe does, and it
+         isolates itself. This page proves it. -->
+    <style>
+      :root {
+        --bg: #0b0e14;
+        --panel: #11161f;
+        --text: #d7dee9;
+        --muted: #8a97a9;
+        --border: #232c3d;
+        --ok: #2ecc71;
+        --bad: #e74c3c;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        padding: 1.5rem;
+      }
+      h1 {
+        font-size: 1.15rem;
+        margin: 0 0 0.4rem;
+      }
+      p.sub {
+        color: var(--muted);
+        margin: 0 0 1rem;
+        max-width: 60rem;
+        line-height: 1.5;
+      }
+      #handshake {
+        font-size: 0.95rem;
+        margin-bottom: 1rem;
+      }
+      #handshake.ok {
+        color: var(--ok);
+      }
+      #handshake.bad {
+        color: var(--bad);
+      }
+      pre#out {
+        width: min(60rem, 100%);
+        height: 38vh;
+        overflow-y: auto;
+        background: #05070a;
+        color: #c8f7c5;
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        padding: 0.75rem;
+        margin: 0;
+        font-size: 0.8rem;
+        line-height: 1.35;
+        white-space: pre-wrap;
+      }
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+        align-items: center;
+        margin: 0.75rem 0 1rem;
+        font-size: 0.85rem;
+      }
+      input[type="text"] {
+        width: 22rem;
+        max-width: 100%;
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 0.35rem;
+        padding: 0.35rem 0.5rem;
+        font: inherit;
+      }
+      input[type="number"] {
+        width: 5rem;
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 0.35rem;
+        padding: 0.3rem 0.4rem;
+        font: inherit;
+      }
+      button {
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 0.35rem;
+        padding: 0.35rem 0.7rem;
+        font: inherit;
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: var(--muted);
+      }
+      #log {
+        width: min(60rem, 100%);
+        height: 22vh;
+        overflow-y: auto;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        padding: 0.6rem 0.8rem;
+        font-size: 0.75rem;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🐉 Dragon86 Hoster — embed test</h1>
+    <p class="sub">
+      This page plays the Dragon86 OS: it embeds <code>index.html</code> in a
+      hidden 1×1 iframe and speaks bridge protocol v1 over real postMessage —
+      hello every 400ms, 6s timeout note, data both ways, resize, exit. It
+      uses the same message shapes as <code>src/bridge/hoster.ts</code> in
+      the OS repo. The parent page (this one) is NOT cross-origin isolated;
+      only the iframe is.
+    </p>
+    <div id="handshake">handshake: waiting…</div>
+    <pre id="out"></pre>
+    <div class="controls">
+      <input
+        id="cmd"
+        type="text"
+        placeholder="command to send (Enter appends \r)"
+        spellcheck="false"
+        autocomplete="off"
+      />
+      <button id="send" type="button">Send</button>
+      <button id="echo" type="button">Send “echo hi”</button>
+      <button id="ctrlc" type="button">Ctrl+C</button>
+      <label>cols <input id="cols" type="number" value="100" min="1" /></label>
+      <label>rows <input id="rows" type="number" value="30" min="1" /></label>
+      <button id="resize" type="button">Send resize</button>
+      <button id="reload" type="button">Reload iframe</button>
+    </div>
+    <h2 style="font-size: 0.95rem">Protocol log</h2>
+    <div id="log"></div>
+    <script type="module" src="/src/embedTest.ts"></script>
+  </body>
+</html>
