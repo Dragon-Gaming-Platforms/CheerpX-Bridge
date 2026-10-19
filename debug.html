@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Dragon86 Hoster — debug console</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐉</text></svg>"
+    />
+    <!-- Same cross-origin-isolation setup as index.html: the engine runs
+         on THIS page in the debug harness, so this page needs it too. -->
+    <script>
+      window.coi = { coepCredentialless: () => false };
+    </script>
+    <script src="./coi-serviceworker.js"></script>
+    <style>
+      :root {
+        --bg: #0b0e14;
+        --panel: #11161f;
+        --text: #d7dee9;
+        --muted: #8a97a9;
+        --border: #232c3d;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        padding: 1.5rem;
+      }
+      h1 {
+        font-size: 1.15rem;
+        margin: 0 0 0.4rem;
+      }
+      p.sub {
+        color: var(--muted);
+        margin: 0 0 1rem;
+        max-width: 60rem;
+        line-height: 1.5;
+      }
+      dl.status {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 0.35rem 1rem;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        padding: 0.8rem 1rem;
+        margin: 0 0 1rem;
+        max-width: 60rem;
+        font-size: 0.85rem;
+      }
+      dl.status dt {
+        color: var(--muted);
+      }
+      dl.status dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      textarea#console {
+        width: min(60rem, 100%);
+        height: 45vh;
+        background: #05070a;
+        color: #c8f7c5;
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        padding: 0.75rem;
+        font: inherit;
+        font-size: 0.85rem;
+        line-height: 1.35;
+        resize: vertical;
+      }
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: center;
+        margin: 0.75rem 0 1rem;
+        font-size: 0.85rem;
+      }
+      input[type="number"] {
+        width: 5rem;
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 0.35rem;
+        padding: 0.3rem 0.4rem;
+        font: inherit;
+      }
+      button {
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 0.35rem;
+        padding: 0.35rem 0.7rem;
+        font: inherit;
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: var(--muted);
+      }
+      #log {
+        width: min(60rem, 100%);
+        height: 22vh;
+        overflow-y: auto;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        padding: 0.6rem 0.8rem;
+        font-size: 0.75rem;
+        white-space: pre-wrap;
+      }
+      .hint {
+        color: var(--muted);
+        font-size: 0.8rem;
+        max-width: 60rem;
+        line-height: 1.5;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🐉 Dragon86 Hoster — debug console</h1>
+    <p class="sub">
+      Rough test harness (not the product): the engine runs on this page and
+      the textarea below plays the role of the OS, speaking bridge protocol v1
+      over an in-page loopback transport. Output is <em>raw</em> — escape
+      sequences render as visible text (ESC shown as ␛), there is deliberately
+      no terminal emulator here. Click the console and type.
+    </p>
+    <div id="status">starting…</div>
+    <textarea
+      id="console"
+      spellcheck="false"
+      autocomplete="off"
+      autocapitalize="off"
+      placeholder="Engine booting… the bash prompt will appear here. Click and type."
+    ></textarea>
+    <div class="controls">
+      <label>cols <input id="cols" type="number" value="80" min="1" /></label>
+      <label>rows <input id="rows" type="number" value="24" min="1" /></label>
+      <button id="resize" type="button">Send resize</button>
+      <button id="hello" type="button">Send hello again</button>
+      <button id="clear" type="button">Clear console</button>
+    </div>
+    <p class="hint">
+      Try: <code>echo hi</code> · <code>stty size</code> (verify resize took
+      effect) · <code>touch ~/persist-test &amp;&amp; ls ~</code> then reload —
+      the file must still exist (IDB overlay) · <code>exit</code> (watch the
+      protocol log for the exit message) · <code>top</code>/<code>vim</code>
+      will spew escapes — that's raw mode working as intended.
+    </p>
+    <h2 style="font-size: 0.95rem">Protocol log</h2>
+    <div id="log"></div>
+    <script type="module" src="/src/debug.ts"></script>
+  </body>
+</html>

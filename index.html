@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="Dragon86 Hoster — headless CheerpX engine page for the Dragon86 web OS. No UI; the OS drives it via a postMessage bridge."
+    />
+    <title>Dragon86 Hoster — CheerpX engine</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐉</text></svg>"
+    />
+    <!--
+      Cross-origin isolation via coi-serviceworker (MIT, (c) Guido Zuidhof).
+      GitHub Pages cannot set COOP/COEP response headers, so this service
+      worker rewrites responses to make the site cross-origin isolated,
+      which CheerpX needs for SharedArrayBuffer. The worker file lives at
+      this site's root, so its scope is exactly this project site — it can
+      never control the Dragon86 OS site or any other page.
+      Force require-corp (credentialless off) for Safari compatibility.
+      This must load before any other script. First visit: the worker
+      installs and the page reloads itself once; that is expected.
+    -->
+    <script>
+      window.coi = { coepCredentialless: () => false };
+    </script>
+    <script src="./coi-serviceworker.js"></script>
+    <style>
+      :root {
+        --bg: #0b0e14;
+        --panel: #11161f;
+        --text: #d7dee9;
+        --muted: #8a97a9;
+        --accent: #e74c3c;
+        --border: #232c3d;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+          monospace;
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding: 3rem 1rem;
+      }
+      main {
+        width: min(44rem, 100%);
+      }
+      h1 {
+        font-size: 1.4rem;
+        margin: 0 0 0.5rem;
+      }
+      h1 .accent {
+        color: var(--accent);
+      }
+      p.sub {
+        color: var(--muted);
+        line-height: 1.55;
+        margin: 0 0 1.5rem;
+      }
+      dl.status {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 0.45rem 1.25rem;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.6rem;
+        padding: 1.1rem 1.25rem;
+        margin: 0;
+      }
+      dl.status dt {
+        color: var(--muted);
+      }
+      dl.status dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      p.links {
+        margin-top: 1.25rem;
+        color: var(--muted);
+        font-size: 0.85rem;
+      }
+      a {
+        color: var(--text);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>🐉 Dragon86 <span class="accent">Hoster</span></h1>
+      <p class="sub">
+        Headless CheerpX engine page for the Dragon86 web OS. This page has no
+        UI of its own — the OS embeds it in a hidden iframe and drives a Linux
+        shell through a postMessage bridge (protocol v1). If you're seeing this
+        directly, the live engine status is below.
+      </p>
+      <div id="status">starting…</div>
+      <p class="links">
+        Test harnesses: <a href="./debug.html">debug console</a> ·
+        <a href="./embed-test.html">embed test</a>
+      </p>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
