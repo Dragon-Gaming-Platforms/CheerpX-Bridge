@@ -120,3 +120,13 @@ export const ALLOWED_PARENT_ORIGIN_PATTERNS: readonly RegExp[] = [
 
 /** Allow http(s)://localhost:<any port> and 127.0.0.1 as parents (OS dev). */
 export const ALLOW_LOCALHOST_PARENTS = true;
+
+/**
+ * BroadcastChannel name for "engine in a separate tab" mode: the OS opens
+ * this page as a top-level tab and speaks the same bridge protocol v1 over
+ * the channel (window.opener is severed by this page's COOP, so direct
+ * postMessage between the tabs is unavailable). Must match Dragon86.
+ * BroadcastChannel is same-origin only, which production satisfies (both
+ * sites live on dragon-gaming-platforms.github.io).
+ */
+export const BROADCAST_CHANNEL_NAME = "dragon86-hoster-v1";
