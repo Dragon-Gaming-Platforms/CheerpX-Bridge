@@ -103,6 +103,21 @@ check(
   !isOriginAllowed("http://localhost.evil.com:5173"),
 );
 check("null origin rejected", !isOriginAllowed("null"));
+check(
+  "Arena preview origin allowed",
+  isOriginAllowed("https://4173-iatqo3b0pn2z37cg2tiql.e2b.app"),
+);
+check("e2b over http rejected", !isOriginAllowed("http://4173-abc123.e2b.app"));
+check(
+  "e2b suffix attack rejected",
+  !isOriginAllowed("https://4173-abc123.e2b.app.evil.com"),
+);
+check(
+  "e2b without leading port rejected",
+  !isOriginAllowed("https://abc123-4173.e2b.app"),
+);
+check("bare e2b.app rejected", !isOriginAllowed("https://e2b.app"));
+check("e2b with empty id rejected", !isOriginAllowed("https://4173-.e2b.app"));
 
 // ---------- HosterBridge over LoopbackTransport ----------
 async function bridgeTests(): Promise<void> {
@@ -188,6 +203,10 @@ async function bridgeTests(): Promise<void> {
 // ---------- PostMessageTransport ----------
 function postMessageTests(): void {
   const received: unknown[] = [];
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) =>
+    warnings.push(args.map(String).join(" "));
   let peerOrigin: string | null = null;
   const transport = new PostMessageTransport((o) => (peerOrigin = o));
   transport.onMessage((m) => received.push(m));
@@ -200,6 +219,29 @@ function postMessageTests(): void {
 
   dispatch({ source: fakeParent, origin: "https://evil.example.com", data: hello });
   check("message from disallowed origin ignored", received.length === 0);
+  check(
+    "rejected hello warns once and names the origin",
+    warnings.length === 1 && warnings[0].includes("https://evil.example.com"),
+  );
+
+  dispatch({ source: fakeParent, origin: "https://evil.example.com", data: hello });
+  check(
+    "repeated rejected hello neither warns nor passes",
+    warnings.length === 1 && received.length === 0,
+  );
+
+  dispatch({
+    source: fakeParent,
+    origin: "https://evil.example.com",
+    data: { v: 1, t: "data", d: "x" },
+  });
+  check("non-hello from disallowed origin stays silent", warnings.length === 1);
+
+  dispatch({ source: fakeParent, origin: "https://other.example.com", data: hello });
+  check(
+    "a second disallowed origin warns separately",
+    warnings.length === 2 && warnings[1].includes("https://other.example.com"),
+  );
 
   dispatch({ source: fakeParent, origin: "https://dragon-gaming-platforms.github.io", data: { v: 9, t: "hello" } });
   check("malformed message ignored", received.length === 0);
@@ -214,6 +256,9 @@ function postMessageTests(): void {
     fakeParent.posted.length === 1 &&
       fakeParent.posted[0].origin === "http://localhost:5173",
   );
+
+  check("no warnings from allowed-origin traffic", warnings.length === 2);
+  console.warn = originalWarn;
 }
 
 await bridgeTests();

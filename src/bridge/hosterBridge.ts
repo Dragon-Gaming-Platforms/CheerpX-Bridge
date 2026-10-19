@@ -181,10 +181,17 @@ export class HosterBridge {
  * Security: every inbound message must come from our direct parent frame
  * AND from an allowlisted origin; outbound messages are addressed to the
  * exact origin that hello'd us — never "*".
+ *
+ * Diagnostics: a `hello` rejected purely for its origin logs ONE console
+ * warning per origin (see warnRejectedHello). The protocol itself stays
+ * silent toward untrusted origins, exactly as specified — the warning
+ * only exists so "engine never connects" is diagnosable in devtools
+ * instead of being a silent timeout on the OS side.
  */
 export class PostMessageTransport implements BridgeTransport {
   private handler: ((msg: IncomingMessage) => void) | null = null;
   private peerOrigin: string | null = null;
+  private readonly warnedOrigins = new Set<string>();
 
   constructor(private readonly onPeerOrigin?: (origin: string) => void) {
     window.addEventListener("message", (ev) => this.onWindowMessage(ev));
@@ -203,7 +210,10 @@ export class PostMessageTransport implements BridgeTransport {
   private onWindowMessage(ev: MessageEvent): void {
     if (window.parent === window) return; // not embedded
     if (ev.source !== window.parent) return; // only our direct parent
-    if (!isOriginAllowed(ev.origin)) return;
+    if (!isOriginAllowed(ev.origin)) {
+      this.warnRejectedHello(ev);
+      return;
+    }
     const msg = parseIncomingMessage(ev.data);
     if (msg === null) return;
     if (this.peerOrigin === null) {
@@ -211,6 +221,25 @@ export class PostMessageTransport implements BridgeTransport {
       this.onPeerOrigin?.(ev.origin);
     }
     this.handler?.(msg);
+  }
+
+  /**
+   * A parent is speaking our protocol from an origin we don't trust.
+   * Warn once per origin — the OS repeats hello every ~400ms, so an
+   * unthrottled warning would flood the console. Only hellos warn: they
+   * are the handshake, and a rejected hello is precisely the "engine
+   * never connects" symptom worth surfacing.
+   */
+  private warnRejectedHello(ev: MessageEvent): void {
+    if (parseIncomingMessage(ev.data)?.t !== "hello") return;
+    if (this.warnedOrigins.has(ev.origin)) return;
+    this.warnedOrigins.add(ev.origin);
+    console.warn(
+      `[dragon86-hoster] Ignoring bridge hello from non-allowlisted parent ` +
+        `origin "${ev.origin}". If this is the Dragon86 OS, add the origin ` +
+        `to ALLOWED_PARENT_ORIGINS / ALLOWED_PARENT_ORIGIN_PATTERNS in ` +
+        `src/config.ts. (This warning appears once per origin.)`,
+    );
   }
 }
 
