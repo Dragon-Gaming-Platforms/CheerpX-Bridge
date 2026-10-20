@@ -155,9 +155,12 @@
       This page plays the Dragon86 OS: it embeds <code>index.html</code> in a
       hidden 1×1 iframe and speaks bridge protocol v1 over real postMessage —
       hello every 400ms, 6s timeout note, data both ways, resize, exit. It
-      uses the same message shapes as <code>src/bridge/hoster.ts</code> in
-      the OS repo. The parent page (this one) is NOT cross-origin isolated;
-      only the iframe is.
+      also plays the OS side of the <strong>fs1 shared-folder</strong>
+      protocol (v2): its hello advertises <code>caps:["fs1"]</code> and an
+      in-memory fake filesystem answers the hoster's fs requests, mirroring
+      <code>src/bridge/hoster.ts</code> and <code>src/bridge/fs-bridge.ts</code>
+      in the OS repo. The parent page (this one) is NOT cross-origin
+      isolated; only the iframe is.
     </p>
     <div id="handshake">handshake: waiting…</div>
     <pre id="out"></pre>
