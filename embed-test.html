@@ -53,6 +53,36 @@
       #handshake.bad {
         color: var(--bad);
       }
+      #fsstatus {
+        font-size: 0.95rem;
+        margin-bottom: 1rem;
+        color: var(--muted);
+      }
+      #fsstatus.ok {
+        color: var(--ok);
+      }
+      #fslist {
+        width: min(60rem, 100%);
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        padding: 0.6rem 0.8rem;
+        font-size: 0.8rem;
+        margin-bottom: 1rem;
+      }
+      .fsrow {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+        padding: 0.15rem 0;
+      }
+      .fsrow span {
+        flex: 1;
+      }
+      .fsrow button {
+        padding: 0.1rem 0.45rem;
+        font-size: 0.75rem;
+      }
       pre#out {
         width: min(60rem, 100%);
         height: 38vh;
@@ -147,6 +177,29 @@
       <button id="resize" type="button">Send resize</button>
       <button id="reload" type="button">Reload iframe</button>
     </div>
+    <h2 style="font-size: 0.95rem">Shared folder — fake-OS side (↔ guest <code>~/shared</code>)</h2>
+    <p class="sub">
+      Files below live in this page's in-memory fake filesystem (the "OS
+      home"). They should appear in the guest's <code>~/shared</code>
+      within a few seconds — check with <code>ls -la ~/shared</code> above.
+      Going the other way: run
+      <code>echo hello &gt; ~/shared/from-guest.txt</code> in the shell and
+      watch it land here. Deletes and renames sync too. (The two files
+      <code>~/shared/.dragon86-manifest.json</code> and
+      <code>~/shared/.dragon86-agent.log</code> are the sync machinery's
+      own and never cross over.)
+    </p>
+    <div class="controls">
+      <input
+        id="fsname"
+        type="text"
+        placeholder="filename to create on the fake OS (e.g. hello.txt)"
+        spellcheck="false"
+        autocomplete="off"
+      />
+      <button id="fscreate" type="button">Create file</button>
+    </div>
+    <div id="fslist"></div>
     <h2 style="font-size: 0.95rem">Protocol log</h2>
     <div id="log"></div>
     <script type="module" src="/src/embedTest.ts"></script>

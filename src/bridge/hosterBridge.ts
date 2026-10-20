@@ -6,8 +6,12 @@ import {
   PROTOCOL_VERSION,
 } from "../config";
 import {
+  FS_PROTOCOL_VERSION,
   isOriginAllowed,
+  parseFsResponse,
   parseIncomingMessage,
+  type FsRequestMessage,
+  type FsResponseMessage,
   type IncomingMessage,
   type OutgoingMessage,
 } from "./protocol";
@@ -27,16 +31,33 @@ export interface BridgeEngine {
 export interface BridgeHooks {
   /** A peer said hello and `ready` has been (re-)announced. */
   onPeerReady?: () => void;
+  /** The peer's advertised capability list changed (from hello caps). */
+  onPeerCaps?: (caps: string[]) => void;
+  /**
+   * Capabilities this hoster can currently confirm live. Consulted at
+   * every `ready` announcement; the ready carries the intersection with
+   * the peer's hello caps (and no caps field at all when empty, keeping
+   * the v1 wire byte-identical for peers that never asked).
+   */
+  getReadyCaps?: () => string[];
 }
 
 /**
- * How protocol messages get to and from the OS. Two implementations:
- * PostMessageTransport (index.html, the real hidden-iframe deployment) and
+ * How protocol messages get to and from the OS. Implementations:
+ * PostMessageTransport (hidden iframe), BroadcastChannelTransport
+ * (separate tab), CompositeTransport (fan-out over both), and
  * LoopbackTransport (debug.html, engine on the same page).
+ *
+ * The fs pair carries protocol-v2 shared-folder traffic, where the
+ * hoster is the client (fs-req out, fs-res in) — opposite direction to
+ * the v1 handshake. Transports route inbound traffic to exactly one of
+ * the two handlers based on the message version.
  */
 export interface BridgeTransport {
   send(msg: OutgoingMessage): void;
   onMessage(handler: (msg: IncomingMessage) => void): void;
+  sendFs(msg: FsRequestMessage): void;
+  onFsMessage(handler: (msg: FsResponseMessage) => void): void;
 }
 
 /**
@@ -63,6 +84,7 @@ export class HosterBridge {
 
   private engineReady = false;
   private peerSeen = false;
+  private peerCaps = new Set<string>();
   private announcedReady = false;
   private lastReadyAt = 0;
   private exited = false;
@@ -120,6 +142,7 @@ export class HosterBridge {
     switch (msg.t) {
       case "hello":
         this.peerSeen = true;
+        this.notePeerCaps(msg.caps ?? []);
         this.maybeAnnounceReady();
         break;
       case "data":
@@ -141,9 +164,42 @@ export class HosterBridge {
     const firstAnnouncement = !this.announcedReady;
     this.announcedReady = true;
     this.lastReadyAt = now;
-    this.transport.send({ v: PROTOCOL_VERSION, t: "ready" });
+    this.sendReady();
     this.hooks.onPeerReady?.();
     if (firstAnnouncement) this.flush(); // replay backlog (first prompt)
+  }
+
+  /**
+   * Re-send `ready` because the live capability set changed (e.g. the
+   * shared folder finished its first sync after the terminal already
+   * connected). The OS stops hello-ing after the first ready, so without
+   * this nudge it would never learn late-arriving caps. No-op until the
+   * first announcement has happened.
+   */
+  refreshReady(): void {
+    if (!this.announcedReady || this.exited) return;
+    this.lastReadyAt = performance.now();
+    this.sendReady();
+    this.hooks.onPeerReady?.();
+  }
+
+  private sendReady(): void {
+    const live = this.hooks.getReadyCaps?.() ?? [];
+    const caps = live.filter((cap) => this.peerCaps.has(cap));
+    this.transport.send(
+      caps.length > 0
+        ? { v: PROTOCOL_VERSION, t: "ready", caps }
+        : { v: PROTOCOL_VERSION, t: "ready" },
+    );
+  }
+
+  private notePeerCaps(caps: string[]): void {
+    const next = new Set(caps);
+    const changed =
+      next.size !== this.peerCaps.size ||
+      [...next].some((cap) => !this.peerCaps.has(cap));
+    this.peerCaps = next;
+    if (changed) this.hooks.onPeerCaps?.([...next]);
   }
 
   private scheduleFlush(): void {
@@ -191,6 +247,7 @@ export class HosterBridge {
  */
 export class PostMessageTransport implements BridgeTransport {
   private handler: ((msg: IncomingMessage) => void) | null = null;
+  private fsHandler: ((msg: FsResponseMessage) => void) | null = null;
   private peerOrigin: string | null = null;
   private readonly warnedOrigins = new Set<string>();
 
@@ -202,8 +259,17 @@ export class PostMessageTransport implements BridgeTransport {
     this.handler = handler;
   }
 
+  onFsMessage(handler: (msg: FsResponseMessage) => void): void {
+    this.fsHandler = handler;
+  }
+
   send(msg: OutgoingMessage): void {
     // We never speak first: the peer's origin is learned from its hello.
+    if (this.peerOrigin === null || window.parent === window) return;
+    window.parent.postMessage(msg, this.peerOrigin);
+  }
+
+  sendFs(msg: FsRequestMessage): void {
     if (this.peerOrigin === null || window.parent === window) return;
     window.parent.postMessage(msg, this.peerOrigin);
   }
@@ -213,6 +279,13 @@ export class PostMessageTransport implements BridgeTransport {
     if (ev.source !== window.parent) return; // only our direct parent
     if (!isOriginAllowed(ev.origin)) {
       this.warnRejectedHello(ev);
+      return;
+    }
+    // Protocol-v2 fs responses take the fs handler; everything else must
+    // be a well-formed v1 message. Same source+origin gates for both.
+    if ((ev.data as { v?: unknown } | null)?.v === FS_PROTOCOL_VERSION) {
+      const fsMsg = parseFsResponse(ev.data);
+      if (fsMsg !== null) this.fsHandler?.(fsMsg);
       return;
     }
     const msg = parseIncomingMessage(ev.data);
@@ -247,21 +320,31 @@ export class PostMessageTransport implements BridgeTransport {
 /**
  * In-page transport for debug.html: the "OS" is a textarea console on the
  * same page as the engine. Messages still pass through the real protocol
- * validator and a JSON round-trip (standing in for structured clone), so
- * the debug page exercises the same code path as production.
+ * validators and a structuredClone round-trip (same clone semantics as
+ * postMessage/BroadcastChannel — notably Uint8Array payloads survive),
+ * so the debug page exercises the same code path as production.
  */
 export class LoopbackTransport implements BridgeTransport {
   private handler: ((msg: IncomingMessage) => void) | null = null;
+  private fsHandler: ((msg: FsResponseMessage) => void) | null = null;
   private peerHandler: ((msg: OutgoingMessage) => void) | null = null;
+  private peerFsHandler: ((msg: FsRequestMessage) => void) | null = null;
 
   /** Hoster → fake OS. */
   send(msg: OutgoingMessage): void {
-    const clone = JSON.parse(JSON.stringify(msg)) as OutgoingMessage;
-    this.peerHandler?.(clone);
+    this.peerHandler?.(structuredClone(msg));
+  }
+
+  sendFs(msg: FsRequestMessage): void {
+    this.peerFsHandler?.(structuredClone(msg));
   }
 
   onMessage(handler: (msg: IncomingMessage) => void): void {
     this.handler = handler;
+  }
+
+  onFsMessage(handler: (msg: FsResponseMessage) => void): void {
+    this.fsHandler = handler;
   }
 
   /** Fake-OS side: receive messages from the hoster. */
@@ -269,11 +352,21 @@ export class LoopbackTransport implements BridgeTransport {
     this.peerHandler = handler;
   }
 
+  /** Fake-OS side: receive fs requests from the hoster. */
+  onPeerFsMessage(handler: (msg: FsRequestMessage) => void): void {
+    this.peerFsHandler = handler;
+  }
+
   /** Fake-OS side: send a protocol message to the hoster. */
   sendToHoster(raw: unknown): void {
-    const clone = JSON.parse(JSON.stringify(raw)) as unknown;
-    const msg = parseIncomingMessage(clone);
+    const msg = parseIncomingMessage(structuredClone(raw));
     if (msg !== null) this.handler?.(msg);
+  }
+
+  /** Fake-OS side: answer an fs request. */
+  sendFsToHoster(raw: unknown): void {
+    const msg = parseFsResponse(structuredClone(raw));
+    if (msg !== null) this.fsHandler?.(msg);
   }
 }
 
@@ -333,6 +426,7 @@ function createBroadcastChannel(name: string): BroadcastChannel | null {
  */
 export class BroadcastChannelTransport implements BridgeTransport {
   private handler: ((msg: IncomingMessage) => void) | null = null;
+  private fsHandler: ((msg: FsResponseMessage) => void) | null = null;
   private readonly channel: BroadcastChannel | null;
   /** False when BroadcastChannel doesn't exist in this browser/context. */
   readonly available: boolean;
@@ -352,16 +446,31 @@ export class BroadcastChannelTransport implements BridgeTransport {
     this.channel?.postMessage({ ...msg, via: BC_HOSTER_VIA });
   }
 
+  sendFs(msg: FsRequestMessage): void {
+    this.channel?.postMessage({ ...msg, via: BC_HOSTER_VIA });
+  }
+
   onMessage(handler: (msg: IncomingMessage) => void): void {
     this.handler = handler;
+  }
+
+  onFsMessage(handler: (msg: FsResponseMessage) => void): void {
+    this.fsHandler = handler;
   }
 
   private onChannelMessage(ev: MessageEvent): void {
     if (isHosterChannelMessage(ev.data)) return;
     const msg = parseIncomingMessage(ev.data);
-    if (msg === null) return;
-    if (msg.t === "hello") this.onHello?.();
-    this.handler?.(msg);
+    if (msg !== null) {
+      if (msg.t === "hello") this.onHello?.();
+      this.handler?.(msg);
+      return;
+    }
+    // Not v1 — try protocol-v2 fs. (Another hoster tab's fs-req carries
+    // the marker and was dropped above; an unmarked fs-req would fail
+    // both parsers here, since we only ever consume fs-res.)
+    const fsMsg = parseFsResponse(ev.data);
+    if (fsMsg !== null) this.fsHandler?.(fsMsg);
   }
 }
 
@@ -386,7 +495,15 @@ export class CompositeTransport implements BridgeTransport {
     for (const transport of this.transports) transport.send(msg);
   }
 
+  sendFs(msg: FsRequestMessage): void {
+    for (const transport of this.transports) transport.sendFs(msg);
+  }
+
   onMessage(handler: (msg: IncomingMessage) => void): void {
     for (const transport of this.transports) transport.onMessage(handler);
+  }
+
+  onFsMessage(handler: (msg: FsResponseMessage) => void): void {
+    for (const transport of this.transports) transport.onFsMessage(handler);
   }
 }

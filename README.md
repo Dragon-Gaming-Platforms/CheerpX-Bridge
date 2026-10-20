@@ -184,6 +184,14 @@ but see the cross-origin caveat in [OS integration](#os-integration).
    the iframe needs to be.
 6. Point a real Dragon86 build at the deployed URL (Settings → Engine) and
    open its terminal.
+7. Shared folder (fs1): on `embed-test.html`, wait for the
+   _fs1: LIVE ✓_ line, then `ls ~/shared` in the shell — the fake OS's
+   seeded files are there. Run `echo hi > ~/shared/from-guest.txt` — it
+   appears in the page's file list within seconds; create/delete files
+   from the page and watch `~/shared` follow. Reload the iframe (or the
+   whole page) — both sides keep their files and stay in sync. The real
+   Dragon86 (with fs1) behaves the same, with its Files app as the "page
+   side".
 
 ## OS integration
 
@@ -276,6 +284,50 @@ Constraints and assumptions:
 - Browsers without `BroadcastChannel` simply lose tab mode (the transport
   disables itself with one console warning); iframe mode is unaffected.
 
+### Shared folder (fs1)
+
+When the OS advertises the `fs1` capability in `hello` (`caps: ["fs1"]`),
+this hoster keeps a folder in sync between the OS filesystem
+(`/home/user` on the OS side) and the Linux guest at **`/home/user/shared`**,
+using the protocol-v2 `fs-req`/`fs-res` messages from
+`docs/cheerpx-fs-protocol.md` in the Dragon86 repo (this hoster is the fs
+client; the OS is a stateless file server). The terminal `ready` is
+unaffected; once the folder is genuinely mounted and a first sync cycle
+has completed, the hoster echoes `"fs1"` in `ready`'s `caps`
+(re-announcing `ready` if the terminal already connected).
+
+How it works (the spec's "Option A"):
+
+- The shared folder is an IndexedDB-backed device (`dragon86-shared`)
+  mounted at `/home/user/shared` — guest read/write, persistent across
+  reloads, independent of the system disk overlay. CheerpX only lets JS
+  *read whole files back* from it (`readFileAsBlob`), with no listing, so
+  a small Python **guest agent** (`src/engine/guestAgent.py`) runs inside
+  the VM next to bash: every second it publishes a manifest
+  (`~/shared/.dragon86-manifest.json` — path/size/mtime per entry) and
+  applies any OS→guest "plans" the hoster stages into a read-only inbox
+  mount (`~/.dragon86-inbox`). The agent logs to
+  `~/shared/.dragon86-agent.log` and never touches the console.
+- The hoster polls the manifest, diffs it against the OS `tree`, and
+  moves whole files (≤ 16 MB) in whichever direction changed: guest→OS
+  via fs `write`/`remove`/`rename`, OS→guest via staged blobs + a plan
+  the agent applies. Creates, edits, renames and deletes all propagate,
+  typically within ~2–4 s. Change detection is Unison-style (each side
+  compared to its own last-synced state, persisted in `localStorage`),
+  so reloads don't re-upload the world. If both sides edit the same file
+  between polls, the newer write wins (deletes lose to edits; the OS
+  wins ties); files over 16 MB, symlinks, and the two `.dragon86-*`
+  machinery files don't cross.
+
+What to expect in the guest: `~/shared` is yours — `echo hi >
+~/shared/a.txt` and it appears in the OS home folder a moment later, and
+vice versa. The real `~/shared` directory on the system disk (if any) is
+shadowed by the mount while the engine runs. If sync stalls, the status
+page's "Shared folder" line says why, and
+`cat ~/shared/.dragon86-agent.log` has the agent's side of the story.
+`embed-test.html` plays the OS side of fs1 so the whole loop can be
+exercised without the real OS.
+
 ### Cold-boot timing
 
 - **Cold first boot can exceed the OS's 6 s timeout.** On a visitor's very
@@ -323,6 +375,10 @@ src/
     adapter.ts           engine contract (bridge-facing interface)
     cheerpx.d.ts         minimal typings for the CDN runtime
     cheerpxEngine.ts     the ONLY CheerpX-specific code
+    guestAgent.py        shared-folder agent that runs INSIDE the VM
+  fs/
+    fsClient.ts          protocol-v2 fs request/response client
+    sharedFolderSync.ts  three-way diff + guest↔OS folder sync engine
   hoster.ts              wiring: transport + engine + isolation gate
   status.ts              human-visible status line
   main.ts / debug.ts / embedTest.ts   page entry points

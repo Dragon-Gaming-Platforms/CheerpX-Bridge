@@ -130,3 +130,47 @@ export const ALLOW_LOCALHOST_PARENTS = true;
  * sites live on dragon-gaming-platforms.github.io).
  */
 export const BROADCAST_CHANNEL_NAME = "dragon86-hoster-v1";
+
+/**
+ * Shared folder ("fs1", bridge protocol v2) — the guest's
+ * /home/user/shared mirrors the OS filesystem (/home/user) both ways.
+ * Contract: docs/cheerpx-fs-protocol.md in the Dragon86 repo. Design
+ * (spec "Option A"): an IDBDevice dir mount the guest can read-write,
+ * a guest-side agent that manifests it and applies OS→guest plans from
+ * a DataDevice inbox, and this page diffing guest manifest ↔ OS `tree`.
+ */
+
+/** Capability token negotiated on hello/ready for the shared folder. */
+export const FS_CAP = "fs1";
+
+/** IDBDevice (dir-mounted) backing the shared folder. Name per OS spec. */
+export const SHARED_IDB_NAME = "dragon86-shared";
+
+/** Guest mount points. The inbox is a DataDevice (JS writes, guest reads). */
+export const SHARED_MOUNT_PATH = "/home/user/shared";
+export const INBOX_MOUNT_PATH = "/home/user/.dragon86-inbox";
+
+/**
+ * Reserved files at the share root, written by the guest agent and never
+ * synced (an OS file with one of these exact names would be shadowed).
+ */
+export const SHARED_MANIFEST_NAME = ".dragon86-manifest.json";
+export const SHARED_AGENT_LOG_NAME = ".dragon86-agent.log";
+
+/** Whole-file cap of the fs protocol (matches the OS side). */
+export const FS_MAX_FILE_BYTES = 16 * 1024 * 1024;
+
+/** Sync loop cadence (manifest read + OS tree poll). */
+export const FS_SYNC_INTERVAL_MS = 2000;
+
+/** Guest agent cycle cadence (baked into the agent source). */
+export const FS_AGENT_INTERVAL_S = 1;
+
+/** How long an fs-req may go unanswered before the cycle aborts. */
+export const FS_REQUEST_TIMEOUT_MS = 15000;
+
+/** How long to wait for the agent to ack a plan before calling it stuck. */
+export const FS_PLAN_ACK_TIMEOUT_MS = 20000;
+
+/** Manifest not advancing for this long ⇒ agent presumed dead. */
+export const FS_AGENT_STALE_MS = 12000;

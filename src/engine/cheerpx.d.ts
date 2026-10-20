@@ -11,6 +11,17 @@ export interface CheerpXDevice {
   readonly __cheerpxDevice?: unique symbol;
 }
 
+/** In-memory dir device: JS writes files in, the guest reads them. */
+export interface CheerpXDataDevice extends CheerpXDevice {
+  writeFile(name: string, contents: string | Uint8Array): Promise<void>;
+}
+
+/** IndexedDB-backed device (block overlay layer, or dir-mounted FS). */
+export interface CheerpXIDBDevice extends CheerpXDevice {
+  /** Read a whole file back out (dir-mounted use). Null = no such file. */
+  readFileAsBlob(name: string): Promise<Blob | null>;
+}
+
 export interface CheerpXMountPoint {
   type: "ext2" | "dir" | "devs" | "devpts" | "proc" | "sys";
   path: string;
@@ -53,8 +64,10 @@ export interface CheerpXModule {
   CloudDevice: { create(url: string): Promise<CheerpXDevice> };
   /** Loads a disk image over HTTP range requests (read-only base). */
   HttpBytesDevice: { create(url: string): Promise<CheerpXDevice> };
-  /** IndexedDB-backed writable block store (persistent overlay layer). */
-  IDBDevice: { create(name: string): Promise<CheerpXDevice> };
+  /** In-memory dir device JS can write files into. */
+  DataDevice: { create(): Promise<CheerpXDataDevice> };
+  /** IndexedDB-backed writable store (block overlay layer or dir FS). */
+  IDBDevice: { create(name: string): Promise<CheerpXIDBDevice> };
   /** Writable overlay: reads fall through to base, writes go to overlay. */
   OverlayDevice: {
     create(base: CheerpXDevice, overlay: CheerpXDevice): Promise<CheerpXDevice>;
