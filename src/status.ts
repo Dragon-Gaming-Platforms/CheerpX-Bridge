@@ -27,6 +27,8 @@ export class StatusView {
       : "embedded — waiting for OS hello…";
   /** Separate-tab (BroadcastChannel) peer; row hidden until first set. */
   private tabPeerText: string | null = null;
+  /** fs1 shared-folder sync; row hidden until the sync reports in. */
+  private sharedFolderText: string | null = null;
 
   constructor(private readonly el: HTMLElement) {
     this.render();
@@ -47,6 +49,11 @@ export class StatusView {
     this.render();
   }
 
+  setSharedFolder(text: string): void {
+    this.sharedFolderText = text;
+    this.render();
+  }
+
   private render(): void {
     const isolated = window.crossOriginIsolated === true;
     const sab = typeof SharedArrayBuffer !== "undefined";
@@ -61,6 +68,9 @@ export class StatusView {
     ];
     if (this.tabPeerText !== null) {
       rows.push(["Tab peer", this.tabPeerText]);
+    }
+    if (this.sharedFolderText !== null) {
+      rows.push(["Shared folder", this.sharedFolderText]);
     }
 
     const dl = document.createElement("dl");

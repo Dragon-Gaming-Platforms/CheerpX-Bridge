@@ -10,8 +10,9 @@ import { StatusView } from "./status";
 /**
  * index.html — the headless engine page.
  *
- * Boots CheerpX + bash and serves the OS over bridge protocol v1 through
- * TWO transports at once (one bridge, one engine — see
+ * Boots CheerpX + bash and serves the OS over bridge protocol v1 (plus
+ * the v2 "fs1" shared-folder ops when the OS advertises that capability)
+ * through TWO transports at once (one bridge, one engine — see
  * CompositeTransport): embedded as a hidden 1×1 iframe (parent
  * postMessage), or opened as a separate top-level tab (BroadcastChannel;
  * window.opener is severed by this page's COOP, so direct postMessage is
@@ -52,5 +53,6 @@ if (statusEl !== null) {
       if (frameHello) status.setPeer("connected — ready announced ✓");
       if (tabHello) status.setTabPeer("connected — ready announced ✓");
     },
+    onSharedFolderState: (text) => status.setSharedFolder(text),
   });
 }
